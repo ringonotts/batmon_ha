@@ -1,0 +1,10 @@
+{
+  "domain": "batmon",
+  "name": "BatMon",
+  "version": "1.0",
+  "config_flow": true,
+  "requirements": ["bleak>=0.22.0"],
+  "codeowners": ["@ringonotts"],
+  "documentation": "https://monitor-things.com",
+  "iot_class": "local_polling"
+}
