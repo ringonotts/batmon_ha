@@ -1,58 +1,38 @@
-from homeassistant.config_entries import ConfigEntry
+"""The Batmon BLE integration."""
+
+from __future__ import annotations
+
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.discovery import async_discover
-from .batmon import BatMonDataUpdateCoordinator
-from .const import DOMAIN
-import logging
-_LOGGER = logging.getLogger(__name__)
+
+from .const import MAX_RETRIES_AFTER_STARTUP
+from .coordinator import BatMonBLEConfigEntry, BatMonBLEDataUpdateCoordinator
+
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
 
 
-async def async_setup(hass: HomeAssistant, config: dict):
-    """Set up BatMon integration."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
+async def async_setup_entry(
+    hass: HomeAssistant, entry: BatMonBLEConfigEntry
+) -> bool:
+    """Set up Batmon BLE device from a config entry."""
+    coordinator = BatMonBLEDataUpdateCoordinator(hass, entry)
+    await coordinator.async_config_entry_first_refresh()
 
+    # Once its setup and we know we are not going to delay
+    # the startup of Home Assistant, we can set the max attempts
+    # to a higher value. If the first connection attempt fails,
+    # Home Assistant's built-in retry logic will take over.
+    coordinator.batmon.set_max_attempts(MAX_RETRIES_AFTER_STARTUP)
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Set up BatMon from a config entry."""
-    coordinator = BatMonDataUpdateCoordinator(hass, config_entry=entry)
+    entry.runtime_data = coordinator
 
-    # Perform an initial data refresh to populate the coordinator
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
-        _LOGGER.error(f"Error refreshing coordinator: {err}")
-        return False
-
-    # Store the coordinator
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
-    # Forward platform setups
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "switch"])
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Unload BatMon integration."""
-    coordinator = hass.data[DOMAIN].pop(entry.entry_id, None)
-    if coordinator:
-        coordinator.cancel_discovery_task()
-    return await hass.config_entries.async_unload_platforms(entry, ["sensor", "switch"])
-
-
-async def notify_new_devices(hass, coordinator):
-    """Notify Home Assistant of new devices."""
-    for device in coordinator.data.values():
-        if device.get("status") == "new":
-            # Notify Home Assistant of a new device
-            await async_discover(
-                hass,
-                "batmon",
-                {
-                    "name": device["name"],
-                    "address": device["address"],
-                },
-                "batmon",
-            )
-            device["status"] = "notified"  # Mark as notified
+async def async_unload_entry(
+    hass: HomeAssistant, entry: BatMonBLEConfigEntry
+) -> bool:
+    """Unload a config entry."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

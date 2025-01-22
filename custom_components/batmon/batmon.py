@@ -1,103 +1,179 @@
 import asyncio
-from bleak import BleakClient
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.helpers import device_registry as dr
-from datetime import datetime, timedelta
+import dataclasses
+from enum import IntEnum
+from functools import partial
 import logging
+from struct import pack, unpack
+import sys
+from bleak import BleakClient, BleakError
+from bleak.backends.device import BLEDevice
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from async_interrupt import interrupt
 
-from .const import SCAN_INTERVAL, UUID_SENSORS_COMMAND, DOMAIN, BatmonSensorCommand, BmConst, CPPushByteArray
+from .const import DEFAULT_MAX_UPDATE_ATTEMPTS, UPDATE_TIMEOUT, UUID_DEVICE_API, UUID_SENSORS_COMMAND
+
+if sys.version_info[:2] < (3, 11):
+    from async_timeout import timeout as asyncio_timeout
+else:
+    from asyncio import timeout as asyncio_timeout
 
 _LOGGER = logging.getLogger(__name__)
 
+class DisconnectedError(Exception):
+    """Disconnected from device."""
 
-class BatMonDataUpdateCoordinator(DataUpdateCoordinator):
-    """Coordinator for fetching BatMon sensor data."""
 
-    def __init__(self, hass, config_entry):
-        """Initialize the coordinator."""
-        self.config_entry = config_entry
-        self.data = {}
-        self.device_locks = {}  # Store locks for each device
-        # Remember config_entry has to be configured above here!
-        super().__init__(
-            hass,
-            _LOGGER,
-            name="BatMon",
-            update_interval=timedelta(seconds=SCAN_INTERVAL),
-        )
+class UnsupportedDeviceError(Exception):
+    """Unsupported device."""
 
-    @property
-    def config(self):
-        """Convenience property to access static configuration data."""
-        return self.config_entry.data
+class BmConst:
+    class Mode(IntEnum):
+        VALUE = 0
+        MIN = 1
+        MAX = 2
+        LIN_EQU = 20
+        TEMPCO = 21
+        THRESHOLD = 22
+        RESET_MINMAX = 23
 
-    async def _async_update_data(self):
+    class Type(IntEnum):
+        BAT_VOLTS = 0
+        EXT_VOLTS = 1
+        INT_TEMP = 2
+        EXT_TEMP = 3
+        BAT_CURRENT = 4
+        BAT_AMPHOURS = 5
+        RELAY_PIN = 6
+        SWITCH_PIN = 7
+        MAX_TYPES = 7
 
-        _LOGGER.debug(f"_async_update_data called at {datetime.now()}")
-        try:
-            """Fetch data for existing devices."""
-            if "devices" not in self.config:
-                _LOGGER.error(
-                    "No 'devices' key found in config. Please check your configuration.")
-                return {}
 
-            # Ensure self.data is a dictionary
-            if self.data is None:
-                _LOGGER.warning(
-                    "self.data was None, resetting to an empty dictionary.")
-                self.data = {}
+class CPopByteArray:
+    def init(self, raw):
+        self.m_BinStr = ''.join(format(byte, '08b') for byte in raw)
+        self.m_Index = 0
 
-            # Fetch data for existing devices
-            for device in self.config.get("devices", []):
-                mac = device.get("mac_address")
-                name = device.get("name")
-                capacity = device.get("battery_size_ah")
-                is_soc_required = device.get("state_of_charge_handling")
+    def popBin(self, numBits):
+        s = self.m_BinStr[:numBits]
+        self.m_BinStr = self.m_BinStr[numBits:]
+        return s if s != '' else '0'
 
-                if not mac:
-                    _LOGGER.warning(
-                        f"Skipping device {name} due to missing MAC address.")
-                    continue
-                if name not in self.data:
-                    self.data[name] = {
-                        "name": name,
-                        "address": mac,
-                        "sensors": {},
-                        "registered": False,
-                    }
+    def binToUint(self, sbin):
+        return int(sbin, 2)
 
-                if name not in self.device_locks:
-                    self.device_locks[name] = asyncio.Lock()
+    def UintToSigned(self, val, bits):
+        if val >= 1 << (bits - 1):
+            val -= 1 << bits
+        return val
 
-                async with self.device_locks[name]:
-                    client = BleakClient(mac)
-                    await client.connect()
-                    _LOGGER.info(f"Connected to {name} ({mac})")
-                    self.data[name]["sensors"] = await self.fetch_batmon_data(client, name, capacity, is_soc_required)
-                    if "registered" not in self.data[name]:
-                        self.data[name]["registered"] = True
-                        self.register_device(
-                            self.hass, self.config_entry, device)
-                    await client.disconnect()
-                    _LOGGER.info(f"Disconnected from {name} ({mac})")
-        except Exception as e:
-            _LOGGER.error(f"Error during polling: {e}")
-            raise e
+    def popU08(self):
+        return self.binToUint(self.popBin(8))
 
-        return self.data
+    def popI08(self):
+        return self.UintToSigned(self.popU08(), 8)
 
-    def register_device(self, hass, config_entry, device):
-        """Register a BatMon device in Home Assistant."""
-        device_registry = dr.async_get(hass)
-        device_registry.async_get_or_create(
-            config_entry_id=config_entry.entry_id,
-            # Unique identifier for the device
-            identifiers={(DOMAIN, device["mac_address"])},
-            manufacturer="Monitor of Things",              # Manufacturer name
-            name=device["name"],                           # Device name
-            model="BatMon",                       # Device model
-            sw_version="1.0",                              # Optional: software version
-        )
+    def popU32(self):
+        return int(self.popBin(32), 2)
+
+    def popFlt(self):
+        s = self.popBin(32)
+        return unpack('>f', pack('I', int(s, 2)))[0]
+
+
+class BatmonSensorCommand:
+    def __init__(self, received_bytes):
+        popv = CPopByteArray()
+        popv.init(received_bytes)
+        self.type = popv.popU08()
+        self.mode = popv.popU08()
+        self.len = popv.popU08()
+
+        if self.mode == BmConst.Mode.VALUE:
+            self.value = popv.popFlt()
+        elif self.mode == BmConst.Mode.MIN:
+            self.minValue = popv.popFlt()
+            self.minEpoch = popv.popU32()
+        elif self.mode == BmConst.Mode.MAX:
+            self.maxValue = popv.popFlt()
+            self.maxEpoch = popv.popU32()
+
+
+class CPPushByteArray:
+    def __init__(self):
+        self.data = bytearray()
+
+    def pushI08(self, value):
+        self.data.append(value & 0xff)
+
+    def pushI16(self, value):
+        self.pushI08(value & 0xff)
+        self.pushI08((value >> 8) & 0xff)
+
+    def pushI32(self, value):
+        self.pushI08(value & 0xff)
+        self.pushI08((value >> 8) & 0xff)
+        self.pushI08((value >> 16) & 0xff)
+        self.pushI08((value >> 24) & 0xff)
+
+    def getList(self):
+        return bytes(self.data)
+
+BATMON_SENSOR_MAPPING = [
+    ("volts", BmConst.Type.BAT_VOLTS),
+    ("volts_ext", BmConst.Type.EXT_VOLTS),
+    ("current", BmConst.Type.BAT_CURRENT),
+    ("int_temperature", BmConst.Type.INT_TEMP),
+    ("ext_temperature", BmConst.Type.EXT_TEMP),
+    ("watt_hours", BmConst.Type.BAT_AMPHOURS),
+    ("relay_state", BmConst.Type.RELAY_PIN),  # RELAY_PIN_STATE
+    ("switch_state", BmConst.Type.SWITCH_PIN),  # IO_PIN_STATE
+    ("state_of_charge", BmConst.Type.BAT_AMPHOURS),
+    ("amp_hours", BmConst.Type.BAT_AMPHOURS),
+]
+
+# class BatMonDeviceInfo:
+#     """Response data with information about the BatMon device without sensors."""
+#     def __init__(self, name: str, address: str = "", did_first_sync: bool = False):
+#         self.name = name
+#         self.address = address
+#         self.did_first_sync = did_first_sync
+#         self.name = name
+
+#     address: str = ""
+#     did_first_sync: bool = False
+
+#     def friendly_name(self) -> str:
+#         return self.name
+
+
+class BatMonDevice():
+    """Response data with information about the BatMon device"""
+    def __init__(self, name: str, address: str):
+        self.name = name
+        if name.startswith("BK-"):
+            self.name = name[3:]  # Slice the string to remove the first three characters
+        self.address = address
+        self.sensors: dict[str, str | float | None] = {}
+
+    def friendly_name(self) -> str:
+        """Generate a name for the device."""
+        return self.name
+
+class BatMonBluetoothDeviceData:
+    """Data for BatMon BLE sensors."""
+
+    def __init__(
+        self,
+        is_metric: bool = True,
+        max_attempts: int = DEFAULT_MAX_UPDATE_ATTEMPTS,
+    ) -> None:
+        """Initialize the BatMon BLE sensor data object."""
+        self.is_metric = is_metric
+        self.max_attempts = max_attempts
+
+    def set_max_attempts(self, max_attempts: int) -> None:
+        """Set the number of attempts."""
+        self.max_attempts = max_attempts
 
     async def fetch_batmon_sensor_data(self, client, sensor_type):
         mode = BmConst.Mode.VALUE
@@ -127,24 +203,17 @@ class BatMonDataUpdateCoordinator(DataUpdateCoordinator):
         data = await client.read_gatt_char(UUID_SENSORS_COMMAND)
         return BatmonSensorCommand(data)
 
-    async def fetch_batmon_data(self, client, name, capacity, is_soc_required):
+    async def fetch_batmon_data(self, client, device, capacity, is_soc_required):
         """Fetch sensor data for a specific BatMon device."""
         data = {}
-        for attr, sensor_type in [
-            ("volts", BmConst.Type.BAT_VOLTS),
-            ("ext_volts", BmConst.Type.EXT_VOLTS),
-            ("current", BmConst.Type.BAT_CURRENT),
-            ("int_temperature", BmConst.Type.INT_TEMP),
-            ("ext_temperature", BmConst.Type.EXT_TEMP),
-            ("watt_hours", BmConst.Type.BAT_AMPHOURS),
-            ("relay_state", BmConst.Type.RELAY_PIN),  # RELAY_PIN_STATE
-            ("switch_state", BmConst.Type.SWITCH_PIN),  # IO_PIN_STATE
-            ("state_of_charge", BmConst.Type.BAT_AMPHOURS),
-            ("amp_hours", BmConst.Type.BAT_AMPHOURS),
-        ]:
+        name = device.name
+        amp_hours = None
+        max_ah = None
+
+        for attr, sensor_type in  BATMON_SENSOR_MAPPING:
             try:
                 response = await self.fetch_batmon_sensor_data(client, sensor_type)
-                if attr in ["volts", "ext_volts", "int_temperature", "ext_temperature"]:
+                if attr in ["volts", "volts_ext", "int_temperature", "ext_temperature"]:
                     data[attr] = round(
                         response.value, 2) if response.value is not None else None
                 elif attr in ["current"]:
@@ -174,3 +243,134 @@ class BatMonDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(f"Error fetching {attr} for {name}: {e}")
 
         return data
+
+    
+    def _handle_disconnect(
+        self, disconnect_future: asyncio.Future[bool], client: BleakClient
+    ) -> None:
+        """Handle disconnect from device."""
+        _LOGGER.debug(f"Disconnected from:  {client.address}")
+        if not disconnect_future.done():
+            disconnect_future.set_result(True)
+
+    async def update_device(self, ble_device: BLEDevice) -> BatMonDevice:
+        """Connects to the device through BLE and retrieves relevant data"""
+        for attempt in range(self.max_attempts):
+            is_final_attempt = attempt == self.max_attempts - 1
+            try:
+                return await self._update_device(ble_device)
+            except DisconnectedError:
+                if is_final_attempt:
+                    raise
+                _LOGGER.debug(
+                    "Unexpectedly disconnected from %s", ble_device.address
+                )
+            except BleakError as err:
+                if is_final_attempt:
+                    raise
+                _LOGGER.debug("Bleak error: %s", err)
+        raise RuntimeError("Should not reach this point")
+
+    async def _update_device(self, ble_device: BLEDevice) -> BatMonDevice:
+        """Connects to the device through BLE and retrieves relevant data"""
+        capacity = 105
+        is_soc_required = "Calculate State of Charge"
+        device = BatMonDevice(ble_device.name, ble_device.address)
+        loop = asyncio.get_running_loop()
+        disconnect_future = loop.create_future()
+        client: BleakClientWithServiceCache = (
+            await establish_connection(  # pylint: disable=line-too-long
+                BleakClientWithServiceCache,
+                ble_device,
+                ble_device.address,
+                disconnected_callback=partial(
+                    self._handle_disconnect, disconnect_future
+                ),
+            )
+        )
+        try:
+            async with interrupt(
+                disconnect_future,
+                DisconnectedError,
+                f"Disconnected from {client.address}",
+            ), asyncio_timeout(UPDATE_TIMEOUT):
+                device.sensors = await self.fetch_batmon_data(client, device, capacity, is_soc_required)
+        except BleakError as err:
+            if "not found" in str(err):  # In future bleak this is a named exception
+                # Clear the char cache since a char is likely
+                # missing from the cache
+                await client.clear_cache()
+            raise
+        except UnsupportedDeviceError:
+            await client.disconnect()
+            raise
+        finally:
+            await client.disconnect()
+
+        return device
+
+    async def _set_batmon_switch(self, client, device, attr, turn_on) :
+        int_value = 0
+        io_type = 2  # 3 == Switch. 2 == Relay
+        api_ref = 606
+        switch_type = BmConst.Type.RELAY_PIN
+        if attr == "switch_state":
+            switch_type = BmConst.Type.SWITCH_PIN
+            io_type = 3
+
+        if turn_on:
+            int_value = 1
+
+        raw = CPPushByteArray()
+        raw.pushI16(api_ref)
+        raw.pushI08(1)  # Next arg is a int32
+        raw.pushI32(io_type)
+        raw.pushI08(1)  # Next arg is a int32
+        raw.pushI32(int_value)
+        raw.pushI08(0)  # Null terminator
+        raw_list = raw.getList()
+
+        ret = await client.write_gatt_char(UUID_DEVICE_API, raw_list, response=True)
+        response = await self.fetch_batmon_sensor_data(client, switch_type)
+        new_state = bool(
+            response.value) if response.value is not None else None
+
+        return new_state
+
+    async def send_switch_command(self, ble_device: BLEDevice, attr, turn_on: bool):
+        """Send a command over Bluetooth to turn the relay or switch on or off."""
+        ret = False
+        device = BatMonDevice(ble_device.name, ble_device.address)
+        loop = asyncio.get_running_loop()
+        disconnect_future = loop.create_future()
+        client: BleakClientWithServiceCache = (
+            await establish_connection(  # pylint: disable=line-too-long
+                BleakClientWithServiceCache,
+                ble_device,
+                ble_device.address,
+                disconnected_callback=partial(
+                    self._handle_disconnect, disconnect_future
+                ),
+            )
+        )
+        try:
+            async with interrupt(
+                disconnect_future,
+                DisconnectedError,
+                f"Disconnected from {client.address}",
+            ), asyncio_timeout(UPDATE_TIMEOUT):
+                _LOGGER.debug(f"Sending relay switch command from:  {client.address}")
+                ret = await self._set_batmon_switch(client, device, attr, turn_on)
+        except BleakError as err:
+            if "not found" in str(err):  # In future bleak this is a named exception
+                # Clear the char cache since a char is likely
+                # missing from the cache
+                await client.clear_cache()
+            raise
+        except UnsupportedDeviceError:
+            await client.disconnect()
+            raise
+        finally:
+            await client.disconnect()
+
+        return ret 

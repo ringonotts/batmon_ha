@@ -1,105 +1,184 @@
-from .options_flow import BatMonOptionsFlow
-import voluptuous as vol
-from homeassistant import config_entries
+"""Config flow for BatMon BlE integration."""
+
+from __future__ import annotations
+
+import dataclasses
 import logging
-from .const import DOMAIN
-
 _LOGGER = logging.getLogger(__name__)
+from typing import Any
+
+from bleak import BleakError
+import voluptuous as vol
+
+from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import (
+    BluetoothServiceInfo,
+    async_discovered_service_info,
+)
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_ADDRESS
+
+from .const import DOMAIN, MFCT_ID
+from .batmon import BatMonBluetoothDeviceData, BatMonDevice
 
 
-class BatMonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for BatMon."""
+SERVICE_UUIDS = [
+    "00000000-cc7a-482a-984a-7f2ed5b3e58f",
+    "00000000-cc7a-482a-984a-7f2ed5b3e58f",
+    "00000000-cc7a-482a-984a-7f2ed5b3e58f",
+    "00000000-cc7a-482a-984a-7f2ed5b3e58f",
+]
+
+
+@dataclasses.dataclass
+class Discovery:
+    """A discovered bluetooth device."""
+
+    name: str
+    discovery_info: BluetoothServiceInfo
+    device: BatMonDevice
+
+
+def get_name(device: BatMonDevice) -> str:
+    """Generate name with model and identifier for device."""
+
+    name = device.friendly_name()
+    _LOGGER.debug("BT device name: %s", name)
+    # if identifier := device.identifier:
+    #     name += f" ({identifier})"
+    return name
+
+
+class BatMonDeviceUpdateError(Exception):
+    """Custom error class for device updates."""
+
+
+class BatMonConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for BatMon BLE."""
 
     VERSION = 1
 
-    def __init__(self):
-        self.devices = []  # Temporary storage for devices
+    def __init__(self) -> None:
+        """Initialize the config flow."""
+        self._discovered_device: Discovery | None = None
+        self._discovered_devices: dict[str, Discovery] = {}
 
-    async def async_step_user(self, user_input=None):
-        """Handle the initial user setup step."""
+    async def _get_device_data(
+        self, discovery_info: BluetoothServiceInfo
+    ) -> BatMonDevice:
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, discovery_info.address
+        )
+        if ble_device is None:
+            _LOGGER.debug("no ble_device in _get_device_data")
+            raise BatMonDeviceUpdateError("No ble_device")
+
+        BatMon = BatMonBluetoothDeviceData()
+
+        try:
+            data = await BatMon.update_device(ble_device)
+        except BleakError as err:
+            _LOGGER.error(
+                "Error connecting to and getting data from %s: %s",
+                discovery_info.address,
+                err,
+            )
+            raise BatMonDeviceUpdateError("Failed getting device data") from err
+        except Exception as err:
+            _LOGGER.error(
+                "Unknown error occurred from %s: %s", discovery_info.address, err
+            )
+            raise
+        return data
+
+    async def async_step_bluetooth(
+        self, discovery_info: BluetoothServiceInfo
+    ) -> ConfigFlowResult:
+        """Handle the bluetooth discovery step."""
+        _LOGGER.debug("Discovered BT device: %s", discovery_info)
+        await self.async_set_unique_id(discovery_info.address)
+        self._abort_if_unique_id_configured()
+
+        try:
+            device = await self._get_device_data(discovery_info)
+        except BatMonDeviceUpdateError:
+            return self.async_abort(reason="cannot_connect")
+        except Exception:  # noqa: BLE001
+            return self.async_abort(reason="unknown")
+
+        name = get_name(device)
+        self.context["title_placeholders"] = {"name": name}
+        self._discovered_device = Discovery(name, discovery_info, device)
+
+        return await self.async_step_bluetooth_confirm()
+
+    async def async_step_bluetooth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm discovery."""
         if user_input is not None:
-            # Add the entered device to the list
-            self.devices.append(
-                {
-                    "name": user_input["name"],
-                    "mac_address": user_input["mac_address"],
-                    "battery_size_ah": user_input.get("battery_size_ah", 0),
-                    "state_of_charge_handling": user_input.get("state_of_charge_handling", "Ignore State of Charge"),
-                }
-            )
-
-            # Check if the user wants to add another device
-            if user_input.get("add_another", False):
-                return await self.async_step_add_device()
-
-            # Finalize setup and create the entry
             return self.async_create_entry(
-                title="BatMon",
-                data={"devices": self.devices, },
+                title=self.context["title_placeholders"]["name"], data={}
             )
 
-        # Schema for the initial form
-        schema = vol.Schema(
-            {
-                vol.Required("name"): str,
-                vol.Required("mac_address"): str,
-                vol.Required(
-                    "state_of_charge_handling",
-                    default="Ignore State of Charge",
-                ): vol.In(["Calculate State of Charge", "Ignore State of Charge"]),
-                vol.Optional("battery_size_ah", default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
-                vol.Optional("add_another", default=False): bool,
-            }
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="bluetooth_confirm",
+            description_placeholders=self.context["title_placeholders"],
         )
 
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the user step to pick discovered device."""
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS]
+            await self.async_set_unique_id(address, raise_on_progress=False)
+            self._abort_if_unique_id_configured()
+            discovery = self._discovered_devices[address]
+
+            self.context["title_placeholders"] = {
+                "name": discovery.name,
+            }
+
+            self._discovered_device = discovery
+
+            return self.async_create_entry(title=discovery.name, data={})
+
+        current_addresses = self._async_current_ids()
+        for discovery_info in async_discovered_service_info(self.hass):
+            address = discovery_info.address
+            if address in current_addresses or address in self._discovered_devices:
+                continue
+
+            # if MFCT_ID not in discovery_info.manufacturer_data:
+            #     continue
+
+            _LOGGER.debug("Discovered BT device: %s", discovery_info)
+            if not any(uuid in SERVICE_UUIDS for uuid in discovery_info.service_uuids):
+                continue
+
+            try:
+                device = await self._get_device_data(discovery_info)
+            except BatMonDeviceUpdateError:
+                return self.async_abort(reason="cannot_connect")
+            except Exception:  # noqa: BLE001
+                return self.async_abort(reason="unknown")
+            name = get_name(device)
+            self._discovered_devices[address] = Discovery(name, discovery_info, device)
+
+        if not self._discovered_devices:
+            return self.async_abort(reason="no_devices_found")
+
+        titles = {
+            address: discovery.device.name
+            for (address, discovery) in self._discovered_devices.items()
+        }
         return self.async_show_form(
             step_id="user",
-            data_schema=schema,
-            description_placeholders={
-                "battery_size_ah": "Specify the battery size in Amp Hours (e.g., 105).",
-            },
-        )
-
-    async def async_step_add_device(self, user_input=None):
-        """Step for adding additional devices."""
-        if user_input is not None:
-            # Add the additional device
-            self.devices.append(
+            data_schema=vol.Schema(
                 {
-                    "name": user_input["name"],
-                    "mac_address": user_input["mac_address"],
-                    "battery_size_ah": user_input.get("battery_size_ah", 0),
-                    "state_of_charge_handling": user_input.get("state_of_charge_handling", 0),
-                }
-            )
-
-            # Check if the user wants to add another device
-            if user_input.get("add_another", False):
-                return await self.async_step_add_device()
-
-            # Finalize setup and create the entry
-            return self.async_create_entry(
-                title="BatMon",
-                data={"devices": self.devices},
-            )
-
-        # Schema for adding another device
-        schema = vol.Schema(
-            {
-                vol.Required("name"): str,
-                vol.Required("mac_address"): str,
-                vol.Required(
-                    "state_of_charge_handling",
-                    default="Ignore State of Charge",
-                ): vol.In(["Calculate State of Charge", "Ignore State of Charge"]),
-                vol.Optional("battery_size_ah", default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
-                vol.Optional("add_another", default=False): bool,
-            }
+                    vol.Required(CONF_ADDRESS): vol.In(titles),
+                },
+            ),
         )
-
-        return self.async_show_form(step_id="add_device", data_schema=schema)
-
-    @staticmethod
-    def async_get_options_flow(config_entry):
-        """Return the options flow handler."""
-        return BatMonOptionsFlow(config_entry)

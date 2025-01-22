@@ -1,144 +1,140 @@
-from bleak import BleakClient
-from homeassistant.components.switch import SwitchEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .const import DOMAIN, SWITCH_DESCRIPTIONS, UUID_DEVICE_API, UUID_SENSORS_COMMAND, BatmonSensorCommand, BmConst, CPPushByteArray
+"""Support for BatMon ble Switches."""
+
+from __future__ import annotations
+
 import logging
+
+from .batmon import BatMonBluetoothDeviceData, BatMonDevice, BatmonSensorCommand, BmConst, CPPushByteArray
+
+from .const import DOMAIN, UUID_SENSORS_COMMAND
+from homeassistant.components.switch import (
+    SwitchEntity,
+    SwitchEntityDescription,
+)
+from homeassistant.const import (
+    Platform,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import (
+    RegistryEntry,
+    async_entries_for_device,
+)
+from homeassistant.helpers.typing import StateType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.unit_system import METRIC_SYSTEM
+from homeassistant.components import bluetooth
+from bleak_retry_connector import close_stale_connections_by_address
+from homeassistant.exceptions import ConfigEntryNotReady
+
+from .coordinator import BatMonBLEDataUpdateCoordinator, BatMonBLEConfigEntry
+
 _LOGGER = logging.getLogger(__name__)
 
+SWITCH_MAPPING_TEMPLATE: dict[str, SwitchEntityDescription] = {
+    "relay_state": SwitchEntityDescription(
+        key="relay_state",
+        name="Relay State",
+    ),
+    "switch_state": SwitchEntityDescription(
+        key="switch_state",
+        name="Switch State",
+    ),
+}
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """Set up BatMon binary sensors dynamically."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: BatMonBLEConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the BatMon BLE sensors."""
+    coordinator = entry.runtime_data
+    
     entities = []
-
-    # Iterate over devices and their binary sensor attributes
-    for device_name, device_data in coordinator.data.items():
-        for attribute, description in SWITCH_DESCRIPTIONS.items():
-            if "sensors" in device_data and attribute in device_data["sensors"]:
-                # if attribute in device_data:
-                entities.append(BatMonSwitch(
-                    coordinator, device_name, attribute, description))
+    switch_mapping = SWITCH_MAPPING_TEMPLATE.copy()
+    _LOGGER.debug("got sensors: %s", coordinator.data.sensors)
+    for switch_type, sensor_value in coordinator.data.sensors.items():
+        if switch_type not in switch_mapping:
+            _LOGGER.warning(f"SWITCH type {switch_type} not in sensors mapping")
+            continue
+        entities.append(
+            BatMonSwitch(coordinator, coordinator.data, switch_mapping[switch_type])
+        )
 
     async_add_entities(entities)
 
 
-class BatMonSwitch(CoordinatorEntity, SwitchEntity):
-    """Representation of a BatMon binary sensor."""
+class BatMonSwitch(
+    CoordinatorEntity[BatMonBLEDataUpdateCoordinator], SwitchEntity
+):
+    """BatMon BLE Switch for the device."""
+
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, device_name, attribute, description):
-        """Initialize the binary sensor."""
+    def __init__(
+        self,
+        coordinator: BatMonBLEDataUpdateCoordinator,
+        batmon_device: BatMonDevice,
+        entity_description: SwitchEntityDescription,
+    ) -> None:
+        """Populate the BatMon entity with relevant data."""
         super().__init__(coordinator)
-        self.coordinator = coordinator
-        self.device_name = device_name
-        self.attribute = attribute
-        self.entity_description = description
-        self._attr_unique_id = f"{device_name}_{attribute}"
+        self.entity_description = entity_description
+        self.batmon_device = batmon_device
 
-    @property
-    def mac_address(self):
-        """Return the MAC address for the device."""
-        device_data = self.coordinator.data.get(self.device_name)
-        if device_data:
-            return device_data.get("address")
-        return None
+        name = batmon_device.name
+        self._attr_unique_id = f"{batmon_device.address}_{entity_description.key}"
+        self.attribute = entity_description.key
+        _LOGGER.debug(f"SWITCH Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}, attribute: {self.attribute}")
+        self._attr_device_info = DeviceInfo(
+            connections={
+                (
+                    CONNECTION_BLUETOOTH,
+                    batmon_device.address,
+                )
+            },
+            name=name,
+        )
 
     @property
     def is_on(self):
         """Return the state of the binary sensor."""
-        return self.coordinator.data[self.device_name]["sensors"].get(self.attribute)
+        return self.coordinator.data.sensors.get(self.attribute, False)
 
     async def async_turn_on(self, **kwargs):
         """Turn the switch on."""
         _LOGGER.debug(f"Turning ON switch {
-                      self.device_name} ({self.attribute})")
-        await self._send_switch_command(self.attribute, True)
+                      self.name} ({self.attribute})")
+        ret = await self._send_switch_command(self.attribute, True)
         # Update the coordinator's data to reflect the new state
-        self.coordinator.data[self.device_name]["sensors"][self.attribute] = True
+        self.coordinator.data.sensors[self.attribute] = ret
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
         """Turn the switch off."""
         _LOGGER.debug(f"Turning OFF switch {
-                      self.device_name} ({self.attribute})")
-        await self._send_switch_command(self.attribute, False)
+                      self.name} ({self.attribute})")
+        ret = await self._send_switch_command(self.attribute, False)
         # Update the coordinator's data to reflect the new state
-        self.coordinator.data[self.device_name]["sensors"][self.attribute] = False
+        self.coordinator.data.sensors[self.attribute] = ret
         self.async_write_ha_state()
 
-    @property
-    def name(self):
-        """Return the name of the binary sensor."""
-        # return f"{self.device_name} {self.entity_description.key.capitalize()}"
-        return f"{self.device_name} {self.entity_description.name}"
 
-    @property
-    def unique_id(self):
-        """Return a unique ID for the binary sensor."""
-        return f"{self.device_name}_{self.entity_description.key}"
+    async def _send_switch_command(self, attr, turn_on):
+        address = self.batmon_device.address
 
-    @property
-    def device_info(self):
-        """Return device information for grouping entities."""
-        return {
-            # Unique identifier for the device
-            "identifiers": {(DOMAIN, self.device_name)},
-            "name": "BatMon",  # Group name shown in the UI
-            "manufacturer": "Monitor of Things",
-            "model": "BatMon Sensor",
-            "sw_version": "1.0",
-            "entry_type": None,  # Explicitly avoid marking this as a "control" entity
-        }
+        assert address is not None
 
-    async def fetch_batmon_sensor_data(self, client, sensor_type):
-        mode = BmConst.Mode.VALUE
-        raw = CPPushByteArray()
-        raw.pushI08(sensor_type)
-        raw.pushI08(mode)
-        raw.pushI08(0)
-        n = raw.getList()
-        await client.write_gatt_char(UUID_SENSORS_COMMAND, n, response=True)
-        data = await client.read_gatt_char(UUID_SENSORS_COMMAND)
-        return BatmonSensorCommand(data)
+        await close_stale_connections_by_address(address)
 
-    async def _send_switch_command(self, attr, turn_on: bool):
-        """Send a command over Bluetooth to turn the relay or switch on or off."""
-        int_value = 0
-        io_type = 2  # 3 == Switch. 2 == Relay
-        api_ref = 606
-        sensor_type = BmConst.Type.RELAY_PIN
-        if attr == "switch_state":
-            sensor_type = BmConst.Type.SWITCH_PIN
-            io_type = 3
+        ble_device = bluetooth.async_ble_device_from_address(self.hass, address)
 
-        if turn_on:
-            int_value = 1
-
-        raw = CPPushByteArray()
-        raw.pushI16(api_ref)
-        raw.pushI08(1)  # Next arg is a int32
-        raw.pushI32(io_type)
-        raw.pushI08(1)  # Next arg is a int32
-        raw.pushI32(int_value)
-        raw.pushI08(0)  # Null terminator
-        raw_list = raw.getList()
-
-        mac = self.mac_address
-        if not mac:
-            _LOGGER.error(f"MAC address for {self.device_name} not found.")
-            return
-
-        lock = self.coordinator.device_locks.get(self.device_name)
-        if lock is None:
-            _LOGGER.error(f"No lock found for device {self.device_name}.")
-            return
-
-        async with lock:
-            client = BleakClient(mac)
-            await client.connect()
-            ret = await client.write_gatt_char(UUID_DEVICE_API, raw_list, response=True)
-            response = await self.fetch_batmon_sensor_data(client, sensor_type)
-            new_state = bool(
-                response.value) if response.value is not None else None
-            _LOGGER.debug(f"New state of switch: {new_state} .")
-            await client.disconnect()
+        if not ble_device:
+            raise ConfigEntryNotReady(
+                f"Could not find Batmon device with address {address}"
+            )
+        batmon = BatMonBluetoothDeviceData( _LOGGER, self.hass.config.units is METRIC_SYSTEM)
+        ret = await batmon.send_switch_command(ble_device, attr, turn_on)
+        return ret
