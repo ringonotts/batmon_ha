@@ -188,6 +188,13 @@ class BatMonBluetoothDeviceData:
 
     def calculate_state_of_charge(self, capacity, max_ah, amp_hours):
         tmp_ah = 0
+        try:
+            capacity = float(capacity)
+            max_ah = float(max_ah)
+            amp_hours = float(amp_hours)
+        except ValueError as e:
+            raise ValueError(f"Invalid input to calculate_state_of_charge: {e}")
+
         if max_ah > 0:
             tmp_ah = max_ah
         return round(100 + (((amp_hours-tmp_ah) / capacity) * 100), 1)
@@ -233,7 +240,7 @@ class BatMonBluetoothDeviceData:
                         response.value) if response.value is not None else None
                 elif attr in ["state_of_charge"]:
                     data[attr] = 0
-                    if is_soc_required == "Calculate State of Charge":
+                    if is_soc_required == True:
                         data[attr] = self.calculate_state_of_charge(
                             capacity, max_ah.maxValue, amp_hours)
                 elif attr in ["amp_hours"]:
@@ -253,12 +260,12 @@ class BatMonBluetoothDeviceData:
         if not disconnect_future.done():
             disconnect_future.set_result(True)
 
-    async def update_device(self, ble_device: BLEDevice) -> BatMonDevice:
+    async def update_device(self, ble_device: BLEDevice, is_soc_required, capacity) -> BatMonDevice:
         """Connects to the device through BLE and retrieves relevant data"""
         for attempt in range(self.max_attempts):
             is_final_attempt = attempt == self.max_attempts - 1
             try:
-                return await self._update_device(ble_device)
+                return await self._update_device(ble_device, is_soc_required, capacity)
             except DisconnectedError:
                 if is_final_attempt:
                     raise
@@ -271,10 +278,8 @@ class BatMonBluetoothDeviceData:
                 _LOGGER.debug("Bleak error: %s", err)
         raise RuntimeError("Should not reach this point")
 
-    async def _update_device(self, ble_device: BLEDevice) -> BatMonDevice:
+    async def _update_device(self, ble_device: BLEDevice, is_soc_required, capacity) -> BatMonDevice:
         """Connects to the device through BLE and retrieves relevant data"""
-        capacity = 105
-        is_soc_required = "Calculate State of Charge"
         device = BatMonDevice(ble_device.name, ble_device.address)
         loop = asyncio.get_running_loop()
         disconnect_future = loop.create_future()
@@ -294,6 +299,7 @@ class BatMonBluetoothDeviceData:
                 DisconnectedError,
                 f"Disconnected from {client.address}",
             ), asyncio_timeout(UPDATE_TIMEOUT):
+                #_LOGGER.debug(f"Device:  {device.name}, is soc required: {is_soc_required}, capacity: {capacity}")
                 device.sensors = await self.fetch_batmon_data(client, device, capacity, is_soc_required)
         except BleakError as err:
             if "not found" in str(err):  # In future bleak this is a named exception

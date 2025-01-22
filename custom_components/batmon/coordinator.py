@@ -21,6 +21,7 @@ from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class BatMonBLEDataUpdateCoordinator(DataUpdateCoordinator[BatMonDevice]):
     """Class to manage fetching Batmon BLE data."""
 
@@ -29,6 +30,16 @@ class BatMonBLEDataUpdateCoordinator(DataUpdateCoordinator[BatMonDevice]):
 
     def __init__(self, hass: HomeAssistant, entry: BatMonBLEConfigEntry) -> None:
         """Initialize the coordinator."""
+        self.state_of_charge_required = entry.data.get(
+            "state_of_charge_required", False)
+        self.battery_capacity = entry.data.get("battery_capacity", None)
+
+        _LOGGER.debug(
+            "Setting up BatMon BLE: State of Charge Required = %s, Battery Capacity = %s",
+            self.state_of_charge_required,
+            self.battery_capacity,
+        )
+
         self.batmon = BatMonBluetoothDeviceData(
             _LOGGER, hass.config.units is METRIC_SYSTEM
         )
@@ -48,7 +59,8 @@ class BatMonBLEDataUpdateCoordinator(DataUpdateCoordinator[BatMonDevice]):
 
         await close_stale_connections_by_address(address)
 
-        ble_device = bluetooth.async_ble_device_from_address(self.hass, address)
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, address)
 
         if not ble_device:
             raise ConfigEntryNotReady(
@@ -59,10 +71,11 @@ class BatMonBLEDataUpdateCoordinator(DataUpdateCoordinator[BatMonDevice]):
     async def _async_update_data(self) -> BatMonDevice:
         """Get data from Batmon BLE."""
         try:
-            data = await self.batmon.update_device(self.ble_device)
+            data = await self.batmon.update_device(self.ble_device, self.state_of_charge_required, self.battery_capacity)
         except Exception as err:
             raise UpdateFailed(f"Unable to fetch data: {err}") from err
 
         return data
+
 
 BatMonBLEConfigEntry: TypeAlias = ConfigEntry[BatMonBLEDataUpdateCoordinator]

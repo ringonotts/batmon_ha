@@ -54,7 +54,7 @@ async def async_setup_entry(
     
     entities = []
     switch_mapping = SWITCH_MAPPING_TEMPLATE.copy()
-    _LOGGER.debug("got sensors: %s", coordinator.data.sensors)
+    #_LOGGER.debug("got sensors: %s", coordinator.data.sensors)
     for switch_type, sensor_value in coordinator.data.sensors.items():
         if switch_type not in switch_mapping:
             _LOGGER.warning(f"SWITCH type {switch_type} not in sensors mapping")
@@ -87,7 +87,7 @@ class BatMonSwitch(
         name = batmon_device.name
         self._attr_unique_id = f"{batmon_device.address}_{entity_description.key}"
         self.attribute = entity_description.key
-        _LOGGER.debug(f"SWITCH Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}, attribute: {self.attribute}")
+        #_LOGGER.debug(f"SWITCH Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}, attribute: {self.attribute}")
         self._attr_device_info = DeviceInfo(
             connections={
                 (
