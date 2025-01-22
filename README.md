@@ -4,9 +4,6 @@
 This repository enables the integration of the BatMon product range into Home Assistant.
 Please see further details on BatMon here: https://monitor-things.com/pages/what-is-batmon
 
-
-
-
 # BatMon Prerequisites
 
  - All of your BatMon’s must be installed and turned on
@@ -45,17 +42,15 @@ This guide assumes the user is familiar with Home Assistant
 
 # Integrating BatMon sensors to your Home Assistant
 
- 1. Go to Settings->Devices & services
- 2. Click “+ ADD INTEGRATION”
- 3. In the search bar for “Select brand” type “batmon”
- 4. Click on the BatMon result
- 5. Configure the popup config flow with the details of your BatMon devices you noted in the pre-requisites
-**Note**: The “state_of_charge_handling” is generally set to “ignore” unless the BatMon is monitoring a Battery bank
-6. If you want to calculate the State of Charge please also enter the size of your battery bank in Amp Hours (Ah).
-7. Click the “add_another” checkbox if you would like to configure another BatMon device in your HA instance
+1. Go to Settings->Devices & services
+2. Your BatMon devices should apear in the "Discovered" section - if so, press "ADD" and proceed to step 6.
+3. If no BatMon devices are discovered and they are in range, Click “+ ADD INTEGRATION”
+4. In the search bar for “Select brand” type “batmon”
+5. Click on the BatMon component result to discover your nearby devices
+6. Configure the popup config flow with the details of your BatMon devices you noted in the pre-requisites
+**Note**: The “state_of_charge_handling” is generally set to “unchecked” unless the BatMon is monitoring a Battery bank
+7. If you want to calculate the State of Charge please also enter the size of your battery bank in Amp Hours (Ah).
 8. Press “SUBMIT” and allow HA to connect to your BatMon device(s).
-**NOTE**: If any of your BatMon devices are still connected over Bluetooth to any other Bluetooth client (like the BatMon smartphone app) then this stage will not work and you will have to disconnect your BatMons from the Bluetooth client and start this phase again
-9. Add the new BatMon entities to your Home Assistant Overview page
 
 # Support
 Please feel free to raise issues or questions in the issue's form and we will get back to you ASAP 
