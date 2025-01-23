@@ -110,10 +110,10 @@ def async_migrate(hass: HomeAssistant, address: str, sensor_name: str) -> None:
     ent_reg = er.async_get(hass)
     unique_id_trailer = f"_{sensor_name}"
     new_unique_id = f"{address}{unique_id_trailer}"
-    #_LOGGER.debug(f"sensor async migrate Sensor: {DOMAIN}, uniquie ID: {new_unique_id} ")
+    # _LOGGER.debug(f"sensor async migrate Sensor: {DOMAIN}, uniquie ID: {new_unique_id} ")
     if ent_reg.async_get_entity_id(DOMAIN, Platform.SENSOR, new_unique_id):
         # New unique id already exists
-        #_LOGGER.debug(f"uniquie ID already exists: {new_unique_id} ")
+        # _LOGGER.debug(f"uniquie ID already exists: {new_unique_id} ")
         return
     dev_reg = dr.async_get(hass)
     if not (
@@ -129,18 +129,19 @@ def async_migrate(hass: HomeAssistant, address: str, sensor_name: str) -> None:
     )
     matching_reg_entry: RegistryEntry | None = None
     for entry in entities:
-        #_LOGGER.debug(f"Evaluating entity: {entry.unique_id} WITH: {unique_id_trailer}")
+        # _LOGGER.debug(f"Evaluating entity: {entry.unique_id} WITH: {unique_id_trailer}")
         if entry.unique_id.endswith(unique_id_trailer) and (
             not matching_reg_entry or "(" not in entry.unique_id
         ):
             matching_reg_entry = entry
-    #_LOGGER.debug(f"MAtching entity: {matching_reg_entry.unique_id}, WITH: {new_unique_id}")
+    # _LOGGER.debug(f"MAtching entity: {matching_reg_entry.unique_id}, WITH: {new_unique_id}")
     if not matching_reg_entry or matching_reg_entry.unique_id == new_unique_id:
         # Already has the newest unique id format
         return
     entity_id = matching_reg_entry.entity_id
-    ent_reg.async_update_entity(entity_id=entity_id, new_unique_id=new_unique_id)
-    #_LOGGER.debug("Migrated entity '%s' to unique id '%s'", entity_id, new_unique_id)
+    ent_reg.async_update_entity(
+        entity_id=entity_id, new_unique_id=new_unique_id)
+    # _LOGGER.debug("Migrated entity '%s' to unique id '%s'", entity_id, new_unique_id)
 
 
 async def async_setup_entry(
@@ -168,12 +169,14 @@ async def async_setup_entry(
     entities = []
     for sensor_type, sensor_value in coordinator.data.sensors.items():
         if sensor_type not in sensors_mapping:
-            _LOGGER.warning(f"Sensor type {sensor_type} not in sensors mapping")
+            _LOGGER.warning(
+                f"Sensor type {sensor_type} not in sensors mapping")
             continue
         async_migrate(hass, coordinator.data.address, sensor_type)
-        #_LOGGER.debug(f"SENSOR setup sensor type: {sensor_type}, mapping: {sensors_mapping[sensor_type]}")
+        # _LOGGER.debug(f"SENSOR setup sensor type: {sensor_type}, mapping: {sensors_mapping[sensor_type]}")
         entities.append(
-            BatMonSensor(coordinator, coordinator.data, sensors_mapping[sensor_type])
+            BatMonSensor(coordinator, coordinator.data,
+                         sensors_mapping[sensor_type])
         )
 
     async_add_entities(entities)
@@ -197,8 +200,9 @@ class BatMonSensor(
         self.entity_description = entity_description
 
         name = batmon_device.name
-        self._attr_unique_id = f"{batmon_device.address}_{entity_description.key}"
-        #_LOGGER.debug(f"SENSOR Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}")
+        self._attr_unique_id = f"{batmon_device.address}_{
+            entity_description.key}"
+        # _LOGGER.debug(f"SENSOR Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}")
         self._attr_device_info = DeviceInfo(
             connections={
                 (

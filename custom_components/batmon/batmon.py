@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 from enum import IntEnum
 from functools import partial
 import logging
@@ -19,12 +18,14 @@ else:
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class DisconnectedError(Exception):
     """Disconnected from device."""
 
 
 class UnsupportedDeviceError(Exception):
     """Unsupported device."""
+
 
 class BmConst:
     class Mode(IntEnum):
@@ -118,6 +119,7 @@ class CPPushByteArray:
     def getList(self):
         return bytes(self.data)
 
+
 BATMON_SENSOR_MAPPING = [
     ("volts", BmConst.Type.BAT_VOLTS),
     ("volts_ext", BmConst.Type.EXT_VOLTS),
@@ -148,16 +150,19 @@ BATMON_SENSOR_MAPPING = [
 
 class BatMonDevice():
     """Response data with information about the BatMon device"""
+
     def __init__(self, name: str, address: str):
         self.name = name
         if name.startswith("BK-"):
-            self.name = name[3:]  # Slice the string to remove the first three characters
+            # Slice the string to remove the first three characters
+            self.name = name[3:]
         self.address = address
         self.sensors: dict[str, str | float | None] = {}
 
     def friendly_name(self) -> str:
         """Generate a name for the device."""
         return self.name
+
 
 class BatMonBluetoothDeviceData:
     """Data for BatMon BLE sensors."""
@@ -193,7 +198,8 @@ class BatMonBluetoothDeviceData:
             max_ah = float(max_ah)
             amp_hours = float(amp_hours)
         except ValueError as e:
-            raise ValueError(f"Invalid input to calculate_state_of_charge: {e}")
+            raise ValueError(
+                f"Invalid input to calculate_state_of_charge: {e}")
 
         if max_ah > 0:
             tmp_ah = max_ah
@@ -217,7 +223,7 @@ class BatMonBluetoothDeviceData:
         amp_hours = None
         max_ah = None
 
-        for attr, sensor_type in  BATMON_SENSOR_MAPPING:
+        for attr, sensor_type in BATMON_SENSOR_MAPPING:
             try:
                 response = await self.fetch_batmon_sensor_data(client, sensor_type)
                 if attr in ["volts", "volts_ext", "int_temperature", "ext_temperature"]:
@@ -251,7 +257,6 @@ class BatMonBluetoothDeviceData:
 
         return data
 
-    
     def _handle_disconnect(
         self, disconnect_future: asyncio.Future[bool], client: BleakClient
     ) -> None:
@@ -299,7 +304,7 @@ class BatMonBluetoothDeviceData:
                 DisconnectedError,
                 f"Disconnected from {client.address}",
             ), asyncio_timeout(UPDATE_TIMEOUT):
-                #_LOGGER.debug(f"Device:  {device.name}, is soc required: {is_soc_required}, capacity: {capacity}")
+                # _LOGGER.debug(f"Device:  {device.name}, is soc required: {is_soc_required}, capacity: {capacity}")
                 device.sensors = await self.fetch_batmon_data(client, device, capacity, is_soc_required)
         except BleakError as err:
             if "not found" in str(err):  # In future bleak this is a named exception
@@ -315,7 +320,7 @@ class BatMonBluetoothDeviceData:
 
         return device
 
-    async def _set_batmon_switch(self, client, device, attr, turn_on) :
+    async def _set_batmon_switch(self, client, device, attr, turn_on):
         int_value = 0
         io_type = 2  # 3 == Switch. 2 == Relay
         api_ref = 606
@@ -365,7 +370,8 @@ class BatMonBluetoothDeviceData:
                 DisconnectedError,
                 f"Disconnected from {client.address}",
             ), asyncio_timeout(UPDATE_TIMEOUT):
-                _LOGGER.debug(f"Sending relay switch command from:  {client.address}")
+                _LOGGER.debug(f"Sending relay switch command from:  {
+                              client.address}")
                 ret = await self._set_batmon_switch(client, device, attr, turn_on)
         except BleakError as err:
             if "not found" in str(err):  # In future bleak this is a named exception
@@ -379,4 +385,4 @@ class BatMonBluetoothDeviceData:
         finally:
             await client.disconnect()
 
-        return ret 
+        return ret

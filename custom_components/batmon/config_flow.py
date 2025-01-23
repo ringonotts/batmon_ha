@@ -26,6 +26,7 @@ SERVICE_UUIDS = [
     "00000000-cc7a-482a-984a-7f2ed5b3e58f",
 ]
 
+
 @dataclasses.dataclass
 class Discovery:
     """A discovered bluetooth device."""
@@ -33,12 +34,15 @@ class Discovery:
     discovery_info: BluetoothServiceInfo
     device: BatMonDevice
 
+
 def get_name(device: BatMonDevice) -> str:
     """Generate name with model and identifier for device."""
     return device.friendly_name()
 
+
 class BatMonDeviceUpdateError(Exception):
     """Custom error class for device updates."""
+
 
 class BatMonConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for BatMon BLE."""
@@ -63,10 +67,13 @@ class BatMonConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             data = await BatMon.update_device(ble_device, False, "0")
         except BleakError as err:
-            _LOGGER.error("Error connecting to and getting data from %s: %s", discovery_info.address, err)
-            raise BatMonDeviceUpdateError("Failed getting device data") from err
+            _LOGGER.error(
+                "Error connecting to and getting data from %s: %s", discovery_info.address, err)
+            raise BatMonDeviceUpdateError(
+                "Failed getting device data") from err
         except Exception as err:
-            _LOGGER.error("Unknown error occurred from %s: %s", discovery_info.address, err)
+            _LOGGER.error("Unknown error occurred from %s: %s",
+                          discovery_info.address, err)
             raise
         return data
 
@@ -146,13 +153,16 @@ class BatMonConfigFlow(ConfigFlow, domain=DOMAIN):
                 continue
 
             name = get_name(device)
-            self._discovered_devices[address] = Discovery(name, discovery_info, device)
+            self._discovered_devices[address] = Discovery(
+                name, discovery_info, device)
 
         if not self._discovered_devices:
             return self.async_abort(reason="no_devices_found")
 
-        titles = {address: discovery.name for address, discovery in self._discovered_devices.items()}
+        titles = {address: discovery.name for address,
+                  discovery in self._discovered_devices.items()}
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(titles)}),
+            data_schema=vol.Schema(
+                {vol.Required(CONF_ADDRESS): vol.In(titles)}),
         )

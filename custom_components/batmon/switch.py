@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from .batmon import BatMonBluetoothDeviceData, BatMonDevice, BatmonSensorCommand, BmConst, CPPushByteArray
-
-from .const import DOMAIN, UUID_SENSORS_COMMAND
+from .batmon import BatMonBluetoothDeviceData, BatMonDevice 
+from homeassistant.core import HomeAssistant
 from homeassistant.components.switch import (
     SwitchEntity,
     SwitchEntityDescription,
@@ -14,15 +13,8 @@ from homeassistant.components.switch import (
 from homeassistant.const import (
     Platform,
 )
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.entity_registry import (
-    RegistryEntry,
-    async_entries_for_device,
-)
-from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.unit_system import METRIC_SYSTEM
 from homeassistant.components import bluetooth
@@ -44,6 +36,7 @@ SWITCH_MAPPING_TEMPLATE: dict[str, SwitchEntityDescription] = {
     ),
 }
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: BatMonBLEConfigEntry,
@@ -51,16 +44,18 @@ async def async_setup_entry(
 ) -> None:
     """Set up the BatMon BLE sensors."""
     coordinator = entry.runtime_data
-    
+
     entities = []
     switch_mapping = SWITCH_MAPPING_TEMPLATE.copy()
-    #_LOGGER.debug("got sensors: %s", coordinator.data.sensors)
+    # _LOGGER.debug("got sensors: %s", coordinator.data.sensors)
     for switch_type, sensor_value in coordinator.data.sensors.items():
         if switch_type not in switch_mapping:
-            _LOGGER.warning(f"SWITCH type {switch_type} not in sensors mapping")
+            _LOGGER.warning(
+                f"SWITCH type {switch_type} not in sensors mapping")
             continue
         entities.append(
-            BatMonSwitch(coordinator, coordinator.data, switch_mapping[switch_type])
+            BatMonSwitch(coordinator, coordinator.data,
+                         switch_mapping[switch_type])
         )
 
     async_add_entities(entities)
@@ -85,9 +80,10 @@ class BatMonSwitch(
         self.batmon_device = batmon_device
 
         name = batmon_device.name
-        self._attr_unique_id = f"{batmon_device.address}_{entity_description.key}"
+        self._attr_unique_id = f"{batmon_device.address}_{
+            entity_description.key}"
         self.attribute = entity_description.key
-        #_LOGGER.debug(f"SWITCH Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}, attribute: {self.attribute}")
+        # _LOGGER.debug(f"SWITCH Coordinator BatMon Sensor name: {name}, unique_id: {self._attr_unique_id}, attribute: {self.attribute}")
         self._attr_device_info = DeviceInfo(
             connections={
                 (
@@ -121,7 +117,6 @@ class BatMonSwitch(
         self.coordinator.data.sensors[self.attribute] = ret
         self.async_write_ha_state()
 
-
     async def _send_switch_command(self, attr, turn_on):
         address = self.batmon_device.address
 
@@ -129,12 +124,14 @@ class BatMonSwitch(
 
         await close_stale_connections_by_address(address)
 
-        ble_device = bluetooth.async_ble_device_from_address(self.hass, address)
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, address)
 
         if not ble_device:
             raise ConfigEntryNotReady(
                 f"Could not find Batmon device with address {address}"
             )
-        batmon = BatMonBluetoothDeviceData( _LOGGER, self.hass.config.units is METRIC_SYSTEM)
+        batmon = BatMonBluetoothDeviceData(
+            _LOGGER, self.hass.config.units is METRIC_SYSTEM)
         ret = await batmon.send_switch_command(ble_device, attr, turn_on)
         return ret
