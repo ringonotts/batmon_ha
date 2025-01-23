@@ -267,6 +267,7 @@ class BatMonBluetoothDeviceData:
 
     async def update_device(self, ble_device: BLEDevice, is_soc_required, capacity) -> BatMonDevice:
         """Connects to the device through BLE and retrieves relevant data"""
+        delay = 1
         for attempt in range(self.max_attempts):
             is_final_attempt = attempt == self.max_attempts - 1
             try:
@@ -281,6 +282,12 @@ class BatMonBluetoothDeviceData:
                 if is_final_attempt:
                     raise
                 _LOGGER.debug("Bleak error: %s", err)
+            # Introduce a delay before retrying
+            await asyncio.sleep(delay)
+
+            # Increase delay for exponential backoff
+            delay *= 2  # Double the delay for the next attempt
+
         raise RuntimeError("Should not reach this point")
 
     async def _update_device(self, ble_device: BLEDevice, is_soc_required, capacity) -> BatMonDevice:
@@ -304,7 +311,7 @@ class BatMonBluetoothDeviceData:
                 DisconnectedError,
                 f"Disconnected from {client.address}",
             ), asyncio_timeout(UPDATE_TIMEOUT):
-                # _LOGGER.debug(f"Device:  {device.name}, is soc required: {is_soc_required}, capacity: {capacity}")
+                _LOGGER.debug(f"Connected to Device:  {device.address}")
                 device.sensors = await self.fetch_batmon_data(client, device, capacity, is_soc_required)
         except BleakError as err:
             if "not found" in str(err):  # In future bleak this is a named exception
