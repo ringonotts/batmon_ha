@@ -11,14 +11,14 @@ Please see further details on BatMon here: https://monitor-things.com/pages/what
  - All of your BatMon’s must be configured in the smartphone app
    
  - The main battery state of charge parameters must be configured (if
-   you want an accurate state of charge reading)
+   you want an accurate state of charge reading). Do this by switching to the simple view and completing the wizard.
    
 - You have captured the mac address and name of each BatMon device you
-   want to integrate with Home Assistant
+   want to integrate with Home Assistant (in the initial view on the BatMon app (not the simple view), on the BatMon card, choose "About" and the MAC address is in there. Note, for iOS users, this is the only way)
    
  - You have completely closed the BatMon smartphone app
    
--  You have completely closed the BatMon smartphone app
+-  You have completely closed the BatMon smartphone app (sorry, just do it once is fine)
    
 -  Bluetooth only supports one active connection to a device at a time –
    so If you don’t completely close the BatMon smartphone app to ensure
