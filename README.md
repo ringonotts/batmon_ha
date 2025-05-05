@@ -13,9 +13,6 @@ Please see further details on BatMon here: https://monitor-things.com/pages/what
  - The main battery state of charge parameters must be configured (if
    you want an accurate state of charge reading). Do this by switching to the simple view and completing the wizard.
    
-- You have captured the mac address and name of each BatMon device you
-   want to integrate with Home Assistant (in the initial view on the BatMon app (not the simple view), on the BatMon card, choose "About" and the MAC address is in there. Note, for iOS users, this is the only way)
-   
  - You have completely closed the BatMon smartphone app
    
 -  You have completely closed the BatMon smartphone app (sorry, just do it once is fine)
@@ -36,7 +33,7 @@ This guide assumes the user is familiar with Home Assistant
  1. Get the “batmon” folder and its contents from the custom_components
     folder in this repo
   2.  Copy the “batmon” folder (and it’s contents) to your Home Assistance
-    instance under this folder: /config/custom_components  
+    instance under this folder: /config/custom_components  (we simply use the HA "Samba share" add-on to access this folder)
   3. If the folder “custom_components” does not exist create it  
   4. Restart your instance of Home Assistance
 
