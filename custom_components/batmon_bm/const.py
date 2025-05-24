@@ -1,6 +1,6 @@
 """Constants for BatMon BLE."""
 
-DOMAIN = "batmon"
+DOMAIN = "batmon_bm"
 MFCT_ID = 4077
 
 DEFAULT_SCAN_INTERVAL = 60
