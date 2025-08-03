@@ -30,9 +30,9 @@ This guide assumes the user is familiar with Home Assistant
 
 # Adding the BatMon custom component to Home Assistant
 
- 1. Get the “batmon” folder and its contents from the custom_components
+ 1. Get the “batmon_bm” folder and its contents from the custom_components
     folder in this repo
-  2.  Copy the “batmon” folder (and it’s contents) to your Home Assistance
+  2.  Copy the “batmon_bm” folder (and it’s contents) to your Home Assistance
     instance under this folder: /config/custom_components  (we simply use the HA "Samba share" add-on to access this folder)
   3. If the folder “custom_components” does not exist create it  
   4. Restart your instance of Home Assistance
